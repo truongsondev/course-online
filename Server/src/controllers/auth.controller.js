@@ -82,7 +82,105 @@ const verifyRegistration = async (req, res) => {
         res.status(500).json({ message: 'An internal server error occurred.' });
     }
 };
+const forgotPassword = async (req, res) => {
+    const { email } = req.body;
 
+    if (!email) {
+        return res.status(400).json({ message: 'Email is required.' });
+    }
+
+    try {
+        const user = await prisma.user.findUnique({ where: { email } });
+        if (!user) {
+            return res.status(404).json({ message: 'No user found with this email.' });
+        }
+
+        // Xóa OTP cũ nếu có
+        await prisma.otpVerification.deleteMany({ where: { email } });
+        const otp = generateOTP();
+        const expiresAt = new Date(Date.now() + 10 * 60 * 1000); // 10 phút
+
+        await prisma.otpVerification.create({
+            data: { email, otp, expiresAt },
+        });
+
+        await sendOtpEmail(email, otp);
+
+        res.status(200).json({ message: 'OTP has been sent to your email.' });
+    } catch (error) {
+        console.error(error);
+        res.status(500).json({ message: 'An internal server error occurred.' });
+    }
+};
+const verifyForgotPassword = async (req, res) => {
+    const { email, otp, newPassword } = req.body;
+
+    if (!email || !otp || !newPassword) {
+        return res.status(400).json({ message: 'Email, OTP, and new password are required.' });
+    }
+
+    try {
+        const record = await prisma.otpVerification.findUnique({ where: { email } });
+
+        if (!record) {
+            return res.status(404).json({ message: 'No OTP request found. Please request again.' });
+        }
+
+        if (new Date() > record.expiresAt) {
+            await prisma.otpVerification.delete({ where: { email } });
+            return res.status(410).json({ message: 'OTP has expired. Please request a new one.' });
+        }
+
+        if (record.otp !== otp) {
+            return res.status(400).json({ message: 'Invalid OTP.' });
+        }
+
+        const hashedPassword = await bcrypt.hash(newPassword, 10);
+
+        await prisma.user.update({
+            where: { email },
+            data: { password: hashedPassword },
+        });
+
+        await prisma.otpVerification.delete({ where: { email } });
+
+        res.status(200).json({ message: 'Password has been reset successfully.' });
+    } catch (error) {
+        console.error(error);
+        res.status(500).json({ message: 'An internal server error occurred.' });
+    }
+};
+const changePassword = async (req, res) => {
+    const { email, currentPassword, newPassword } = req.body;
+
+    if (!email || !currentPassword || !newPassword) {
+        return res.status(400).json({ message: 'Email, current password, and new password are required.' });
+    }
+
+    try {
+        const user = await prisma.user.findUnique({ where: { email } });
+        if (!user) {
+            return res.status(404).json({ message: 'No user found with this email.' });
+        }
+
+        const isMatch = await bcrypt.compare(currentPassword, user.password);
+        if (!isMatch) {
+            return res.status(401).json({ message: 'Current password is incorrect.' });
+        }
+
+        const hashedPassword = await bcrypt.hash(newPassword, 10);
+
+        await prisma.user.update({
+            where: { email },
+            data: { password: hashedPassword },
+        });
+
+        res.status(200).json({ message: 'Password has been changed successfully.' });
+    } catch (error) {
+        console.error(error);
+        res.status(500).json({ message: 'An internal server error occurred.' });
+    }
+}
 module.exports = {
     startRegistration,
     verifyRegistration,
